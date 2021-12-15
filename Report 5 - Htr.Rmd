@@ -1,0 +1,209 @@
+---
+title: "Praticando K-NN"
+author: "Heitor Gabriel S. Monteiro"
+date: "03/05/2021"
+output:
+  html_document:
+    highlight: tango
+    theme: cerulean
+    number_sections: yes
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Objetivo e Prelúdio
+
+Nesse exercício, nós vamos investigar o poder do algoritmo K-nn para detecção de câncer, usando [dados abertos](https://www.kaggle.com/hdza1991/breast-cancer-wisconsin-data-set) sobre características dos tumores e comparando entre diferentes tamanhos de vizinhança dos grupos, $K_i$, para fazer a melhor predição de diagnóstico, se é `Maligno` ou `Benigno`.
+
+```{r message=FALSE, warning=FALSE}
+setwd("/home/heitor/Área de Trabalho/R Projects/Análise Macro/Lab 5")
+library(tidyverse)
+library(plotly)
+library(knitr)
+library(kableExtra)
+library(class)
+library(gmodels)
+```
+
+# Os Dados
+
+Importei os dados, chamando-o de `dt`. Retirei a variável `id`. Transformei nossa variável alvo em fator. Por fim, listei e sumarizei as variáveis.  
+
+```{r message=FALSE, warning=FALSE}
+dt <- read_csv("wisc_bc_data.csv") %>% as_tibble()
+```
+
+```{r}
+dt$id <- NULL
+dt$diagnosis <- factor(dt$diagnosis,
+                       levels = c('B', 'M'),
+                       labels = c('Benigno', 'Maligno'))
+glimpse(dt)
+```
+
+Fiz uma nova base de dados escalonando positivamente as variáveis numéricas em relação à maior diferença entre elas. Para isso, apliquei a função `scale1` em cada coluna numérica, criando a nova base, `dt1`.
+
+```{r}
+scale1    <- function(x){ return( (x-min(x)) / (max(x)-min(x)) ) }
+dt1       <- as.data.frame(lapply(dt[2:31],scale1)) %>% as_tibble()
+dt1$diagn <- dt$diagnosis
+```
+
+# Divisão de Amostras
+
+Escolhi, com aleatoriedade fixa em $666$ (para fins de replicação), uma amostra de treino de 80%, sobre o qual o modelo será feito. Portanto, o teste será feito na amostra restante, 20%.
+
+```{r}
+set.seed(666)
+train <- dt1 %>% sample_frac(.,0.8)
+sid   <- as.numeric(rownames(train))
+test  <- dt1[-sid,]
+remove(sid)
+
+
+```
+
+# Modelo e Comparações entre K's
+
+Rodarei um primeiro modelo seguindo a regra de bolso:
+$$k = \sqrt(numero \ \ de \ \ observacoes \ \ do \ \ treino  ) = \sqrt(455) \approx 21$$  
+As amostras de Treino e Teste devem conter apenas variáveis numéricas, por isso, especifiquei que treino e teste devem ser realizados da coluna 1 até a 30, e.g., `tain[1:30]`. Em `cl = ` é que colocarmos a variável-fator, que queremos prever.  
+
+## Primeiro Modelo
+
+```{r}
+knn0 <- knn(train = train[1:30],
+            test  = test[1:30],
+            cl    = train$diagn,
+            k     = 21)
+```
+
+Para fins de comparação, criei um novo banco de dados chamado `rslt0`; comparei em `t0` a acurácia do $k(21)-nn$ e salvei três resultados interessantes: a acurácia global (`Acc0`), o falso benigno (`F_Ben0`) e o falso maligno (`F_Mal0`):  
+
+```{r}
+rslt0  <- data.frame(Original  = c(test$diagn),
+                       Predito = c(knn0))
+t0     <- table(rslt0$Original, rslt0$Predito)
+Acc0   <- sum(diag(t0))/sum(t0)
+F_Ben0 <- sum(t0[2,1])/sum(t0[,1])
+F_Mal0 <- sum(t0[1,2])/sum(t0[,2])
+t0 %>% kable(booktabs = TRUE,
+             escape   = FALSE,
+             digits   = 4,
+             caption  = 'Resultado das predições do primeiro modelo') %>%
+  kable_styling(latex_options = c("striped", "hold_position"),
+                position      = "center",
+                full_width    = F,
+  			    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = T) %>%
+  row_spec(0,    bold = T)
+
+CrossTable(x = test$diagn, 
+           y = knn0, 
+           prop.chisq = F)
+
+```
+
+Salvarei esse resultado e os demais que se seguirão em `Resultados` como se segue:  
+
+```{r}
+Resultados <- data.frame( K             = 21,
+                          Acurácia      = Acc0,
+                          Falso_Benigno = F_Ben0,
+                          Falso_Maligno = F_Mal0)
+```
+
+## Comparando os Demais K
+
+Farei um _loop_ de 1 a 30 onde cada índice será o número de vizinhos, $k=(1:30)$. Em cada $i$, o _loop_ fará um modelo k-nn; salvará temporariamente os diagnósticos preditos vis-a-vis os diagnósticos originais em `rslt`; calcularei e salvarei temporariamente os três resultados que quero; farei uma nova linha com os três resultados e a adicionarei em `Resultados`:  
+
+```{r}
+Ki <- 1:30
+
+for (i in Ki) {
+  modelo_KNN <- knn(train = train[1:30],
+                     test = test[1:30],
+                       cl = train$diagn,
+                        k = i)
+  
+  rslt  <- data.frame(Original = c(test$diagn),
+                      Predito = c(modelo_KNN))
+  
+  tab   <- table(rslt$Original, rslt$Predito)
+  
+  Acc   <- sum(diag(tab))/sum(tab)
+  F_Ben <- sum(tab[2,1])/sum(tab[,1])
+  F_Mal <- sum(tab[1,2])/sum(tab[,2])
+  
+  nova_linha <- data.frame(i, Acc, F_Ben, F_Mal)
+  names(nova_linha) <- c('K', 'Acurácia', 'Falso_Benigno', 'Falso_Maligno')
+  
+  Resultados <- rbind(Resultados, nova_linha)
+}
+```
+
+Visualizando os Resultados:  
+
+```{r}
+Resultados %>% 
+  kable(#format   = "latex",
+         booktabs = TRUE,
+         escape   = FALSE,
+         digits   = 4,
+         caption  = 'Taxa de Acurácia e Falso Resultado Por K Vizinhos Próximos') %>% 
+  kable_styling(latex_options = c("striped", "hold_position"),
+                position      = "center",
+                full_width    = F,
+  			    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = T) %>%
+  row_spec(0,    bold = T) %>% 
+  footnote( general           = "Elaboração Própria.",
+            general_title     = "Fonte:",
+            footnote_as_chunk = T,
+            title_format      = c("italic"))
+```
+
+```{r}
+gg1 <- Resultados %>% slice(-1) %>% 
+  ggplot(aes(x=K, y=Falso_Benigno)) +
+  geom_line(size = .8, color='violet')
+ggplotly(gg1)
+
+gg2 <- Resultados %>%
+  slice(-1) %>% # retira a primeira linha, do modelo knn0
+  mutate(desv_m = Acurácia - mean(Acurácia)) %>% 
+  ggplot(aes(x=K, y=desv_m)) +
+  geom_col(width=.5, color='turquoise1') 
+ggplotly(gg2)
+```
+
+
+Por fim, escolheremos os modelos com melhor acurácia:  
+
+```{r}
+Resultados %>% slice_max(Resultados$Acurácia) %>% 
+  kable(#format   = "latex",
+         booktabs = TRUE,
+         escape   = FALSE,
+         digits   = 4,
+         caption  = 'Taxa(s) Máxima(s) de Acurácia Por K Vizinhos Próximos') %>% 
+  kable_styling(latex_options = c("striped", "hold_position"),
+                position      = "center",
+                full_width    = F,
+  			    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = T) %>%
+  row_spec(0,    bold = T) %>% 
+  footnote( general           = "Elaboração Própria.",
+            general_title     = "Fonte:",
+            footnote_as_chunk = T,
+            title_format      = c("italic"))
+```
+
